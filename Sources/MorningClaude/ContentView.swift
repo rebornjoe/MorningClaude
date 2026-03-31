@@ -9,8 +9,9 @@ struct DayInfo: Identifiable {
 
 struct ContentView: View {
     @State private var statusMessage: String = "Ready to schedule."
+    @State private var activeScheduleDetails: String = "Checking schedules..."
     @State private var selectedTime: Date = defaultWakeTime()
-    @State private var selectedDays: Set<Int> = [1, 2, 3, 4, 5] // Default to Mon-Fri
+    @State private var selectedDays: Set<Int> = [1, 2, 3, 4, 5]
     @State private var customCommand: String = "hi"
 
     let daysOfWeek = [
@@ -118,28 +119,53 @@ struct ContentView: View {
                 .font(.callout)
             }
             .buttonStyle(.plain)
-            .padding(.top, 5)
 
             Text(statusMessage)
             .font(.footnote)
             .foregroundColor(.gray)
             .multilineTextAlignment(.center)
-            .frame(height: 40)
+            .frame(height: 20)
+
+            Divider()
+
+            // NEW: Active Schedule Display
+            VStack(alignment: .leading, spacing: 5) {
+                HStack {
+                    Text("Active System Schedule:")
+                    .font(.caption)
+                    .fontWeight(.bold)
+                    .foregroundColor(.secondary)
+                    Spacer()
+                    Button(action: { fetchActiveSchedule() }) {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.blue)
+                }
+
+                Text(activeScheduleDetails)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundColor(.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+                .background(Color.gray.opacity(0.1))
+                .cornerRadius(5)
+            }
+            .frame(maxWidth: 350)
         }
         .padding(30)
-        .frame(width: 450, height: 480) // Slightly taller to fit the new button
+        .frame(width: 450, height: 600) // Increased height to fit the new list
+        .onAppear {
+            fetchActiveSchedule()
+        }
     }
 
-    // Helper function to safely escape strings for bash and AppleScript
     func buildAppleScript() -> String {
         let bashEscaped = "'" + customCommand.replacingOccurrences(of: "'", with: "'\\''") + "'"
         let appleScriptSafe = bashEscaped
         .replacingOccurrences(of: "\\", with: "\\\\")
         .replacingOccurrences(of: "\"", with: "\\\"")
 
-        // 1. Source the zsh profile so it knows where Claude/Node is installed.
-        // 2. Run the Claude command.
-        // 3. Keep the window open afterward by launching an interactive zsh shell.
         let shellCommand = "source ~/.zshrc 2>/dev/null; claude -p \(appleScriptSafe); exec zsh"
 
         return """
@@ -149,6 +175,7 @@ struct ContentView: View {
                end tell
                """
     }
+
     func testScript() {
         statusMessage = "Running test..."
         let scriptSource = buildAppleScript()
@@ -157,12 +184,11 @@ struct ContentView: View {
         if let appleScript = NSAppleScript(source: scriptSource) {
             appleScript.executeAndReturnError(&errorInfo)
             if let error = errorInfo {
-                statusMessage = "Test failed. Check permissions.\n\(error)"
+                statusMessage = "Test failed. Check permissions."
+                print(error)
             } else {
                 statusMessage = "Test executed successfully."
             }
-        } else {
-            statusMessage = "Failed to compile AppleScript."
         }
     }
 
@@ -193,18 +219,16 @@ struct ContentView: View {
         let scriptsDir = homeDir.appendingPathComponent("Library/Scripts")
         let launchAgentsDir = homeDir.appendingPathComponent("Library/LaunchAgents")
 
-        // 1. pmset schedule
         let pmsetScript = "do shell script \"pmset repeat wake \(pmsetDaysString) \(formattedWakeTime)\" with administrator privileges"
         var errorInfo: NSDictionary?
         if let appleScript = NSAppleScript(source: pmsetScript) {
             appleScript.executeAndReturnError(&errorInfo)
-            if let error = errorInfo {
-                statusMessage = "Error setting wake schedule: \(error)"
+            if errorInfo != nil {
+                statusMessage = "Error setting wake schedule."
                 return
             }
         }
 
-        // 2. Write the dynamic AppleScript to file
         let claudeAppleScriptContent = buildAppleScript()
         let scriptURL = scriptsDir.appendingPathComponent("morning_claude.scpt")
 
@@ -216,7 +240,6 @@ struct ContentView: View {
             return
         }
 
-        // 3. Create LaunchAgent XML
         var intervalsXML = ""
         for day in selectedDays {
             intervalsXML += """
@@ -261,7 +284,6 @@ struct ContentView: View {
             return
         }
 
-        // 4. Load LaunchAgent
         let unloadProcess = Process()
         unloadProcess.executableURL = URL(fileURLWithPath: "/bin/launchctl")
         unloadProcess.arguments = ["unload", plistURL.path]
@@ -274,15 +296,15 @@ struct ContentView: View {
 
         do {
             try loadProcess.run()
-            statusMessage = "Success! Waking at \(formattedWakeTime) and launching at \(String(format: "%02d:%02d", targetHour, targetMinute))."
+            statusMessage = "Success! Task scheduled."
+            fetchActiveSchedule() // Refresh the UI list
         } catch {
-            statusMessage = "Failed to load the scheduled task into launchd."
+            statusMessage = "Failed to load the scheduled task."
         }
     }
 
-    // NEW: Cancel and Cleanup Function
     func cancelAutomation() {
-        statusMessage = "Canceling schedule and cleaning up..."
+        statusMessage = "Canceling schedule..."
 
         let fileManager = FileManager.default
         let homeDir = fileManager.homeDirectoryForCurrentUser
@@ -292,34 +314,57 @@ struct ContentView: View {
         let scriptURL = scriptsDir.appendingPathComponent("morning_claude.scpt")
         let plistURL = launchAgentsDir.appendingPathComponent("com.user.morningclaude.plist")
 
-        // 1. Cancel the pmset wake schedule (requires admin password)
         let pmsetScript = "do shell script \"pmset repeat cancel\" with administrator privileges"
         var errorInfo: NSDictionary?
         if let appleScript = NSAppleScript(source: pmsetScript) {
             appleScript.executeAndReturnError(&errorInfo)
-            if let error = errorInfo {
-                statusMessage = "Error canceling wake schedule: \(error)"
-                return
-            }
         }
 
-        // 2. Unload the LaunchAgent if it exists
         if fileManager.fileExists(atPath: plistURL.path) {
             let unloadProcess = Process()
             unloadProcess.executableURL = URL(fileURLWithPath: "/bin/launchctl")
             unloadProcess.arguments = ["unload", plistURL.path]
             try? unloadProcess.run()
             unloadProcess.waitUntilExit()
-
-            // Delete the plist file
             try? fileManager.removeItem(at: plistURL)
         }
 
-        // 3. Delete the AppleScript file
         if fileManager.fileExists(atPath: scriptURL.path) {
             try? fileManager.removeItem(at: scriptURL)
         }
 
-        statusMessage = "Schedule successfully canceled and files removed."
+        statusMessage = "Schedule canceled."
+        fetchActiveSchedule() // Refresh the UI list
+    }
+
+    // NEW: Fetch and display the active schedule
+    func fetchActiveSchedule() {
+        let fileManager = FileManager.default
+        let launchAgentsDir = fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents")
+        let plistURL = launchAgentsDir.appendingPathComponent("com.user.morningclaude.plist")
+
+        let agentExists = fileManager.fileExists(atPath: plistURL.path)
+        var hardwareWakeStr = "No hardware wake configured."
+
+        // Read the pmset schedule
+        let pmsetScript = "do shell script \"pmset -g sched\""
+        if let appleScript = NSAppleScript(source: pmsetScript) {
+            var errorInfo: NSDictionary?
+            let output = appleScript.executeAndReturnError(&errorInfo)
+
+            if let resultString = output.stringValue {
+                let lines = resultString.components(separatedBy: .newlines)
+                // Filter specifically for repeating wake schedules
+                if let wakeLine = lines.first(where: { $0.contains("wake") }) {
+                    hardwareWakeStr = wakeLine.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+        }
+
+        if agentExists {
+            activeScheduleDetails = "LaunchAgent: Active\n\(hardwareWakeStr)"
+        } else {
+            activeScheduleDetails = "LaunchAgent: None\n\(hardwareWakeStr)"
+        }
     }
 }
