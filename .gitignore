@@ -1,0 +1,32 @@
+# macOS System Files
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+
+# IntelliJ IDEA / JetBrains IDEs
+.idea/
+*.iml
+out/
+
+# Swift Package Manager
+.build/
+Packages/
+.swiftpm/
+.netrc
+
+# Note: If you add external package dependencies later, you generally want 
+# to commit Package.resolved for executables. Since you don't currently have 
+# dependencies, it's safe to ignore it to keep your repo clean.
+Package.resolved
+
+# Xcode (Fallback for other developers)
+build/
+DerivedData/
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+
+# Generated App Build Artifacts
+*.app/
+*.zip
